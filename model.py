@@ -3,13 +3,16 @@ import pandas as pd
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras.callbacks import ModelCheckpoint
+from tensorflow.keras.layers import Embedding, LSTM, Dense
 
 # КОНСТАНТЫ
-rev_len = 2000
+input_length = 2000
+vocab_size = 10000  # Размер словаря для Embedding слоя
+embedding_dim = 128  # Размерность векторов эмбеддинга
 model_path = "model.keras"
-batch_size = 64
+batch_size = 128
 epochs = 100000
-learning_rate = 0.05
+learning_rate = 0.001
 patience = 100
 
 def preprocess_text(text, rev_len):
@@ -24,21 +27,16 @@ if os.path.exists(model_path):
 else:
     # СОЗДАНИЕ МОДЕЛИ
     model = tf.keras.models.Sequential([
-        tf.keras.layers.Dense(rev_len, activation='relu'),
-        tf.keras.layers.Dropout(0.5), 
-        tf.keras.layers.Dense(rev_len // 2, activation="relu"),
-        tf.keras.layers.Dropout(0.5),
-        tf.keras.layers.Dense(rev_len // 4, activation="relu"),
-        tf.keras.layers.Dropout(0.5),
-        tf.keras.layers.Dense(rev_len // 8, activation="relu"),
-        tf.keras.layers.Dropout(0.5),
-        tf.keras.layers.Dense(rev_len // 16, activation="relu"),
-        tf.keras.layers.Dense(1, activation='sigmoid')
+        Embedding(vocab_size, embedding_dim, input_length=input_length),
+        LSTM(128, return_sequences=True),
+        LSTM(64),
+        Dense(64, activation='relu'),
+        Dense(3, activation='softmax')  # Выходной слой с 3 нейронами
     ])
 
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
-        loss=tf.keras.losses.BinaryCrossentropy(),
+        loss=tf.keras.losses.CategoricalCrossentropy(),
         metrics=['accuracy']
     )
 
@@ -70,11 +68,12 @@ x_train = []
 y_train = []
 
 for k in range(align_num):
-    x_train.append(preprocess_text(good_reviews[k], rev_len))
-    y_train.append(1)
-    # y_train.append(0.5) # Убираем нейтральные отзывы
-    x_train.append(preprocess_text(bad_reviews[k], rev_len))
-    y_train.append(0)
+    x_train.append(preprocess_text(good_reviews[k], input_length))
+    y_train.append([0, 0, 1])  # Хорошие отзывы
+    x_train.append(preprocess_text(neutral_reviews[k], input_length))
+    y_train.append([0, 1, 0])  # Нейтральные отзывы
+    x_train.append(preprocess_text(bad_reviews[k], input_length))
+    y_train.append([1, 0, 0])  # Плохие отзывы
 
 x_train = np.array(x_train)
 y_train = np.array(y_train)
@@ -90,15 +89,9 @@ early_stopping_val_loss = tf.keras.callbacks.EarlyStopping(
     restore_best_weights=True
 )
 
-early_stopping_loss = tf.keras.callbacks.EarlyStopping(
-    monitor='loss',
-    patience=patience,
-    restore_best_weights=True
-)
-
 checkpoint_callback = ModelCheckpoint(
-    filepath='model_epoch_{epoch:02d}.keras',
-    save_freq=800 * (x_train.shape[0] // batch_size),  # Сохраняет модель каждые 30 эпох
+    filepath='./models_tmp/model_epoch_{epoch:02d}.keras',
+    save_freq=(x_train.shape[0] // batch_size),  # Сохраняет модель каждые 30 эпох
     save_best_only=False
 )
 
@@ -108,8 +101,8 @@ history = model.fit(
     y_train,
     batch_size=batch_size,
     epochs=epochs,
-    validation_split=0.2,
-    callbacks=[early_stopping_val_loss, early_stopping_loss, checkpoint_callback]
+    validation_split=0.1,
+    callbacks=[early_stopping_val_loss, checkpoint_callback]
 )
 
 # СОХРАНЕНИЕ МОДЕЛИ
