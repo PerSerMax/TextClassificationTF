@@ -1,37 +1,50 @@
 import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import pandas as pd
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras.callbacks import ModelCheckpoint
-from tensorflow.keras.layers import Embedding, LSTM, Dense
+from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
+from tensorflow.keras.layers import Embedding, LSTM, Dense, Dropout, GRU
+from tensorflow.keras.regularizers import l2
+
+
 
 # КОНСТАНТЫ
 input_length = 2000
-vocab_size = 10000  # Размер словаря для Embedding слоя
-embedding_dim = 128  # Размерность векторов эмбеддинга
-model_path = "model.keras"
+vocab_size = 10000
+embedding_dim = 64  # Уменьшили размерность эмбеддинга
+model_path = "./models_tmp/best_model.keras"
+reviews_path = "Reviews.json"
 batch_size = 128
 epochs = 100000
-learning_rate = 0.001
-patience = 100
+learning_rate = 0.0001  # Уменьшили learning rate
+patience = 250  # Уменьшили терпение
 
-def preprocess_text(text, rev_len):
-    text_bytes = text.encode('utf-8')
-    tmp = np.zeros(rev_len)
-    for i in range(min(len(text_bytes), rev_len)):
-        tmp[i] = text_bytes[i]
-    return tmp
 
+def print_green(text):
+    print("\033[32m{}\033[0m".format(text))
+
+
+# Функция предобработки текста
+def preprocess_text(text, tokenizer, max_len):
+    sequences = tokenizer.texts_to_sequences([text])
+    padded_sequences = tf.keras.preprocessing.sequence.pad_sequences(sequences, maxlen=max_len)
+    return padded_sequences[0]
+
+# Загрузка и/или создание модели
 if os.path.exists(model_path):
+    print_green(f"Model loaded from {model_path}")
     model = tf.keras.models.load_model(model_path)
 else:
+    print_green("Model created")
     # СОЗДАНИЕ МОДЕЛИ
     model = tf.keras.models.Sequential([
         Embedding(vocab_size, embedding_dim, input_length=input_length),
-        LSTM(128, return_sequences=True),
-        LSTM(64),
-        Dense(64, activation='relu'),
-        Dense(3, activation='softmax')  # Выходной слой с 3 нейронами
+        GRU(64, return_sequences=False, kernel_regularizer=l2(0.01)),  # Используем GRU вместо LSTM
+        Dropout(0.7),  # Увеличили Dropout
+        Dense(64, activation='relu', kernel_regularizer=l2(0.01)),  # L2-регуляризация
+        Dropout(0.7),  # Ещё один Dropout слой
+        Dense(3, activation='softmax')
     ])
 
     model.compile(
@@ -40,59 +53,42 @@ else:
         metrics=['accuracy']
     )
 
-# СОЗДАНИЕ НАБОРА ДАННЫХ
-file = pd.read_json("Top500FilmsReview.json")
+# Загрузка данных
+file = pd.read_json(reviews_path)
 
-good_reviews = []
-neutral_reviews = []
-bad_reviews = []
-
-for reviews in file['film_reviews']:
-    for review in reviews:
-        if review is None:
-            continue
-        opinion = review["review_opinion"]
-        title = review['title']
-        text = review['text'].replace('\n', '').replace('\r', '')
-        formatted_review = title + text
-        if opinion == 'good':
-            good_reviews.append(formatted_review)
-        elif opinion == 'neutral':
-            neutral_reviews.append(formatted_review)
-        else:
-            bad_reviews.append(formatted_review)
-
-align_num = min(len(bad_reviews), len(good_reviews), len(neutral_reviews))
+good_reviews = file['good_reviews']
+neutral_reviews = file['neutral_reviews']
+bad_reviews = file['bad_reviews']
 
 x_train = []
 y_train = []
 
-for k in range(align_num):
-    x_train.append(preprocess_text(good_reviews[k], input_length))
+# Создание токенизатора
+tokenizer = tf.keras.preprocessing.text.Tokenizer(num_words=vocab_size)
+tokenizer.fit_on_texts(good_reviews + neutral_reviews + bad_reviews)
+
+for k in range(len(good_reviews)):
+    x_train.append(preprocess_text(good_reviews[k], tokenizer, input_length))
     y_train.append([0, 0, 1])  # Хорошие отзывы
-    x_train.append(preprocess_text(neutral_reviews[k], input_length))
+    x_train.append(preprocess_text(neutral_reviews[k], tokenizer, input_length))
     y_train.append([0, 1, 0])  # Нейтральные отзывы
-    x_train.append(preprocess_text(bad_reviews[k], input_length))
+    x_train.append(preprocess_text(bad_reviews[k], tokenizer, input_length))
     y_train.append([1, 0, 0])  # Плохие отзывы
 
 x_train = np.array(x_train)
 y_train = np.array(y_train)
 
-# Проверка форм данных
-print(f"x_train shape: {x_train.shape}")
-print(f"y_train shape: {y_train.shape}")
-
 # CALLBACKS
-early_stopping_val_loss = tf.keras.callbacks.EarlyStopping(
+early_stopping = EarlyStopping(
     monitor='val_loss',
     patience=patience,
     restore_best_weights=True
 )
 
 checkpoint_callback = ModelCheckpoint(
-    filepath='./models_tmp/model_epoch_{epoch:02d}.keras',
-    save_freq=(x_train.shape[0] // batch_size),  # Сохраняет модель каждые 30 эпох
-    save_best_only=False
+    filepath=model_path,
+    monitor='val_loss',
+    save_best_only=True
 )
 
 # ОБУЧЕНИЕ
@@ -102,9 +98,8 @@ history = model.fit(
     batch_size=batch_size,
     epochs=epochs,
     validation_split=0.1,
-    callbacks=[early_stopping_val_loss, checkpoint_callback]
+    callbacks=[early_stopping, checkpoint_callback]
 )
 
 # СОХРАНЕНИЕ МОДЕЛИ
-model.save(model_path)
-print(f"Модель сохранена в {model_path}")
+print(f"Лучшая модель сохранена в {model_path}")
