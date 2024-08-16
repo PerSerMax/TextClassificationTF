@@ -11,6 +11,19 @@ import pymorphy2
 # Инициализация морфологического анализатора
 morph = pymorphy2.MorphAnalyzer()
 
+# КОНСТАНТЫ
+input_length = 3000
+vocab_size = 10000
+embedding_dim = 128
+model_path = "./models_tmp/best_model.keras"
+reviews_path = "Reviews.json"
+batch_size = 128
+epochs = 100000
+learning_rate = 0.000001
+patience = 250
+augmentation_factor = 5  
+
+
 # Функция аугментации текста (без синонимов)
 def augment_text(text, aug_prob=0.1):
     words = text.split()
@@ -27,17 +40,6 @@ def augment_text(text, aug_prob=0.1):
 
     return ' '.join(new_words)
 
-# КОНСТАНТЫ
-input_length = 5000
-vocab_size = 10000
-embedding_dim = 128
-model_path = "./models_tmp/best_model.keras"
-reviews_path = "Reviews.json"
-batch_size = 128
-epochs = 100000
-learning_rate = 0.0001
-patience = 250
-
 def print_green(text):
     print("\033[32m{}\033[0m".format(text))
 
@@ -47,19 +49,18 @@ def preprocess_text(text, tokenizer, max_len):
     padded_sequences = tf.keras.preprocessing.sequence.pad_sequences(sequences, maxlen=max_len)
     return padded_sequences[0]
 
-# Загрузка и/или создание модели
+
+
+# Загрузка или создание модели
 if os.path.exists(model_path):
     print_green(f"Model loaded from {model_path}")
     model = tf.keras.models.load_model(model_path)
 else:
     print_green("Model created")
-    # СОЗДАНИЕ МОДЕЛИ
     model = tf.keras.models.Sequential([
         Embedding(vocab_size, embedding_dim, input_length=input_length),
-        GRU(32, return_sequences=False, kernel_regularizer=l2(0.01)),
-        Dropout(0.7),
-        Dense(64, activation='relu', kernel_regularizer=l2(0.01)),
-        Dropout(0.7),
+        GRU(128, return_sequences=False, kernel_regularizer=l2(0.01)),
+        Dropout(0.0),
         Dense(3, activation='softmax')
     ])
 
@@ -78,7 +79,6 @@ bad_reviews = file['bad_reviews']
 
 x_train = []
 y_train = []
-augmentation_factor = 2  # Количество аугментированных версий для каждого отзыва
 
 # Создание токенизатора
 tokenizer = tf.keras.preprocessing.text.Tokenizer(num_words=vocab_size)
@@ -108,6 +108,8 @@ for k in range(len(good_reviews)):
 
 x_train = np.array(x_train)
 y_train = np.array(y_train)
+
+print_green(f"x_train length: {len(x_train)}")
 
 # CALLBACKS
 early_stopping = EarlyStopping(
